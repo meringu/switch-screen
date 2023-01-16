@@ -1,0 +1,26 @@
+name: windows
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+
+    - name: Install Rustup using win.rustup.rs
+      run: |
+        # Disable the download progress bar which can cause perf issues
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest https://win.rustup.rs/ -OutFile rustup-init.exe
+        .\rustup-init.exe -y --default-host=x86_64-pc-windows-msvc
+        del rustup-init.exe
+      shell: powershell
+
+    - name: Build and Test
+      run: cargo build
+      shell: powershell
