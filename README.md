@@ -18,3 +18,7 @@ Commands:
 Options:
   -h, --help  Print help
 ```
+
+## Installation
+
+Download the latest release binary from the [releases page](https://github.com/meringu/switch-screen/releases).
