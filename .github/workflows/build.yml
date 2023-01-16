@@ -12,7 +12,7 @@ jobs:
     - name: checkout
       uses: actions/checkout@v3
 
-    - name: Install Rustup using win.rustup.rs
+    - name: Install Rust
       run: |
         $ProgressPreference = "SilentlyContinue"
         Invoke-WebRequest https://win.rustup.rs/ -OutFile rustup-init.exe
@@ -20,7 +20,7 @@ jobs:
         del rustup-init.exe
       shell: powershell
 
-    - name: Build and Test
+    - name: Build
       run: cargo build --release
       shell: powershell
 
