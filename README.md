@@ -13,6 +13,7 @@ Commands:
   clone
   extend
   supplied
+  mqtt      Subscribe to an MQTT endpoint. Set the target topology as the payload to trigger a switch event
   help      Print this message or the help of the given subcommand(s)
 
 Options:
