@@ -1,9 +1,9 @@
-use std::fmt;
+use std::{fmt, thread::sleep, time::Duration};
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use rumqttc::{MqttOptions, QoS, Event, Packet};
-use windows::{Win32::{Devices::Display::SetDisplayConfig, Graphics::Gdi}};
+use rumqttc::{Event, MqttOptions, Packet, QoS};
+use windows::Win32::{Devices::Display::SetDisplayConfig, Graphics::Gdi};
 
 #[derive(Debug, Parser)]
 #[command(about)]
@@ -82,16 +82,14 @@ fn main() -> Result<()> {
             }
 
             subscribe(options, &topic)
-        },
+        }
     }
 }
 
 fn switch(topology: Topology) -> Result<()> {
     println!("Switching to {}", topology);
 
-    let res = unsafe {
-        SetDisplayConfig(None, None, Gdi::SDC_APPLY | topology as u32)
-    };
+    let res = unsafe { SetDisplayConfig(None, None, Gdi::SDC_APPLY | topology as u32) };
 
     if res != 0 {
         bail!("An error occcured swtiching displays");
@@ -101,38 +99,55 @@ fn switch(topology: Topology) -> Result<()> {
 }
 
 fn subscribe(options: MqttOptions, topic: &str) -> Result<()> {
-    let (mut client, mut connection) = rumqttc::Client::new(
-        options,
-        10,
-    );
+    'outer: loop {
+        let (mut client, mut connection) = rumqttc::Client::new(options.clone(), 10);
 
-    println!("Subscribing to {}", topic);
-    client.subscribe(topic, QoS::AtMostOnce).unwrap();
+        println!("Subscribing to {}", topic);
+        if let Err(e) = client.subscribe(topic, QoS::AtMostOnce) {
+            println!(
+                "error connecting to server: {}. reconnecting in 10 seconds",
+                e
+            );
+            sleep(Duration::from_secs(10));
+            continue;
+        }
 
-    for res in connection.iter() {
-        let event = res?;
+        for res in connection.iter() {
+            let event = match res {
+                Ok(e) => e,
+                Err(e) => {
+                    println!(
+                        "error reading event from server: {}. reconnecting in 10 seconds",
+                        e
+                    );
+                    sleep(Duration::from_secs(10));
+                    continue 'outer;
+                }
+            };
 
-        let payload = if let Event::Incoming(incoming) = event {
-            if let Packet::Publish(publish) = incoming {
-                match String::from_utf8(publish.payload.to_vec()) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        println!("failed to decode message: {}", e);
-                        continue;
-                    },
+            let payload = if let Event::Incoming(incoming) = event {
+                if let Packet::Publish(publish) = incoming {
+                    match String::from_utf8(publish.payload.to_vec()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            println!("failed to decode message: {}", e);
+                            continue;
+                        }
+                    }
+                } else {
+                    continue;
                 }
             } else {
                 continue;
-            }
-        } else {
-            continue;
-        };
+            };
 
-        match Topology::from_str(&payload, true) {
-            Ok(topology) => switch(topology)?,
-            Err(topology) => println!("unexpected topology: {}", topology),
-        };
+            match Topology::from_str(&payload, true) {
+                Ok(topology) => switch(topology)?,
+                Err(topology) => println!("unexpected topology: {}", topology),
+            };
+        }
+
+        println!("disconnected from server. reconnecting in 10 seconds");
+        sleep(Duration::from_secs(10));
     }
-
-    Ok(())
 }
