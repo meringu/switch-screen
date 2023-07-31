@@ -3,7 +3,7 @@ use std::{fmt, thread::sleep, time::Duration};
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use rumqttc::{Event, MqttOptions, Packet, QoS};
-use windows::Win32::{Devices::Display::SetDisplayConfig, Graphics::Gdi};
+use windows::Win32::Devices::Display::{self, SetDisplayConfig};
 
 #[derive(Debug, Parser)]
 #[command(about)]
@@ -21,30 +21,50 @@ enum Commands {
     SUPPLIED,
     /// Subscribe to an MQTT endpoint. Set the target topology as the payload to trigger a switch event.
     MQTT {
+        /// Broker host
         #[arg(long, default_value = "localhost")]
         host: String,
+        /// Broker port
         #[arg(long, default_value = "1883")]
         port: u16,
+        /// Client ID
         #[arg(long, default_value = "screen-switch")]
         id: String,
+        /// Topic to subscribe to
         #[arg(long, default_value = "screen-switch")]
         topic: String,
+        /// Topic to publish to on successful switch
+        #[arg(long, default_value = "screen-switch-status")]
+        status_topic: String,
 
+        /// Authentication username
         #[arg(long)]
         username: Option<String>,
+        /// Authentication password
         #[arg(long)]
         password: Option<String>,
     },
 }
 
-#[repr(u32)]
 #[derive(Debug, Clone, ValueEnum)]
 enum Topology {
-    INTERNAL = Gdi::SDC_TOPOLOGY_INTERNAL,
-    EXTERNAL = Gdi::SDC_TOPOLOGY_EXTERNAL,
-    CLONE = Gdi::SDC_TOPOLOGY_CLONE,
-    EXTEND = Gdi::SDC_TOPOLOGY_EXTEND,
-    SUPPLIED = Gdi::SDC_TOPOLOGY_SUPPLIED,
+    INTERNAL,
+    EXTERNAL,
+    CLONE,
+    EXTEND,
+    SUPPLIED,
+}
+
+impl Topology {
+    fn to_flags(&self) -> Display::SET_DISPLAY_CONFIG_FLAGS {
+        match self {
+            Self::INTERNAL => Display::SDC_TOPOLOGY_INTERNAL,
+            Self::EXTERNAL => Display::SDC_TOPOLOGY_EXTERNAL,
+            Self::CLONE => Display::SDC_TOPOLOGY_CLONE,
+            Self::EXTEND => Display::SDC_TOPOLOGY_EXTEND,
+            Self::SUPPLIED => Display::SDC_TOPOLOGY_SUPPLIED,
+        }
+    }
 }
 
 impl fmt::Display for Topology {
@@ -63,11 +83,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::INTERNAL => switch(Topology::INTERNAL),
-        Commands::EXTERNAL => switch(Topology::EXTERNAL),
-        Commands::CLONE => switch(Topology::CLONE),
-        Commands::EXTEND => switch(Topology::EXTEND),
-        Commands::SUPPLIED => switch(Topology::SUPPLIED),
+        Commands::INTERNAL => switch(&Topology::INTERNAL),
+        Commands::EXTERNAL => switch(&Topology::EXTERNAL),
+        Commands::CLONE => switch(&Topology::CLONE),
+        Commands::EXTEND => switch(&Topology::EXTEND),
+        Commands::SUPPLIED => switch(&Topology::SUPPLIED),
         Commands::MQTT {
             host,
             port,
@@ -75,21 +95,22 @@ fn main() -> Result<()> {
             username,
             password,
             topic,
+            status_topic,
         } => {
             let mut options = rumqttc::MqttOptions::new(id, host, port);
             if let (Some(u), Some(p)) = (username, password) {
                 options.set_credentials(u, p);
             }
 
-            subscribe(options, &topic)
+            subscribe(options, &topic, &status_topic)
         }
     }
 }
 
-fn switch(topology: Topology) -> Result<()> {
+fn switch(topology: &Topology) -> Result<()> {
     println!("Switching to {}", topology);
 
-    let res = unsafe { SetDisplayConfig(None, None, Gdi::SDC_APPLY | topology as u32) };
+    let res = unsafe { SetDisplayConfig(None, None, Display::SDC_APPLY | topology.to_flags()) };
 
     if res != 0 {
         bail!("An error occcured swtiching displays");
@@ -98,7 +119,7 @@ fn switch(topology: Topology) -> Result<()> {
     Ok(())
 }
 
-fn subscribe(options: MqttOptions, topic: &str) -> Result<()> {
+fn subscribe(options: MqttOptions, topic: &str, status_topic: &str) -> Result<()> {
     'outer: loop {
         let (mut client, mut connection) = rumqttc::Client::new(options.clone(), 10);
 
@@ -142,7 +163,10 @@ fn subscribe(options: MqttOptions, topic: &str) -> Result<()> {
             };
 
             match Topology::from_str(&payload, true) {
-                Ok(topology) => switch(topology)?,
+                Ok(topology) => {
+                    switch(&topology)?;
+                    client.publish(status_topic, QoS::AtMostOnce, true, topology.to_string())?
+                }
                 Err(topology) => println!("unexpected topology: {}", topology),
             };
         }
